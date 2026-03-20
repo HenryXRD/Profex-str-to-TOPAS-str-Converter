@@ -1,4 +1,4 @@
-# Profex-.str-to-TOPAS-.str-converter
+# Profex.str to TOPAS.str Converter
 a python script for the batch conversion of profex .str to TOPAS format .str 
 
 thanks co-pilot
