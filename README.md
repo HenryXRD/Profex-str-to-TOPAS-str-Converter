@@ -11,6 +11,9 @@ The As site is written in the profex str as Wyckoff e x 0.3529 y 0 z 0 for space
 Any human looking at the profex str would be rightly confused. 
 
 # How to use
+
+*Ensure Profex is installed*
+
 •	Ensure path for SPACEGRP.DAT from profex install is set correctly in the .py file
 
 •	DEFAULT_SPACEGRP_DAT = r"C:\Program Files\Profex5\BGMNwin\SPACEGRP.DAT"
@@ -38,11 +41,11 @@ Any human looking at the profex str would be rightly confused.
 # Known failures to convert
 •	Arsenolite.str
 
-•	smectitedi2wfix1.str  turbostratic disorder / layer modelling. Out of scope, for now…
+•	smectitedi2wfix1.str    which has turbostratic disorder / layer modelling. Out of scope, for now…
 
-•	nontronite15a.str  turbostratic disorder / layer modelling. Out of scope, for now….
+•	nontronite15a.str     which has turbostratic disorder / layer modelling. Out of scope, for now….
 
-•	CRYOLITE.STR  Wyckoff a and b both given as 0, 0, 0. Impossible for 14 P12_1/c1
+•	CRYOLITE.STR  Wyckoff a and b both given as 0, 0, 0 in the .str file. This is impossible for 14 P12_1/c1 
 
 •	CSH-0625.str
 
@@ -55,16 +58,22 @@ Any human looking at the profex str would be rightly confused.
 # Conversion
 
 As much of the original profex.str is retained as a comment for the user to confirm (e.g. numeric space group number:setting or HM notation). Phase names generated uniquely so no 2 files within the same batch conversion will be the same. Parameters derived from phase names.
+
+Coordinates output as mod1 to avoid negatives
+
 Beq = 100 * TDS
-Beq 1 inserted when no TDS given as this is the TOPAS gui default
+
+Beq 1 inserted when no TDS given as this is the TOPAS gui default for Beq handling when a structure or cif is imported where none are defined. Note, if you copy such str into a text editor for launch mode, TOPAS will use Beq 0 if you don't explicity add a Beq value.
+
 Profex min and max limits on unit cell applied. If none given +/- 1% default applied 
-Fixed unit cell paramters do not have generated parameter names 
+
+Fixed unit cell parameters by crystal system do not have generated parameter names or are constrained (e.g. a = b = c for cubic with same parameter name)
 
 MVW(), CS_L and scale inserted with derived parameter names
 
 Occupancy parameters are inserted as well when necessary and also have unique names to avoid constraint. 
 
-coordinates converted to fractions. SPACEGRP.DAT used to insert missing coordinates for special positions.
+Coordinates converted to fractions. SPACEGRP.DAT used to insert missing coordinates for special positions. Free coordinates are never guessed - the site is skipped if this is the case in the original .str
 
 
 
