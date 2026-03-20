@@ -52,6 +52,23 @@ Any human looking at the profex str would be rightly confused.
 
 •	ZnAl2O4.str
 
+# Conversion
+
+As much of the original profex.str is retained as a comment for the user to confirm (e.g. numeric space group number:setting or HM notation). Phase names generated uniquely so no 2 files within the same batch conversion will be the same. Parameters derived from phase names.
+Beq = 100 * TDS
+Beq 1 inserted when no TDS given as this is the TOPAS gui default
+Profex min and max limits on unit cell applied. If none given +/- 1% default applied 
+Fixed unit cell paramters do not have generated parameter names 
+
+MVW(), CS_L and scale inserted with derived parameter names
+
+Occupancy parameters are inserted as well when necessary and also have unique names to avoid constraint. 
+
+coordinates converted to fractions. SPACEGRP.DAT used to insert missing coordinates for special positions.
+
+
+
+
 
 
 
