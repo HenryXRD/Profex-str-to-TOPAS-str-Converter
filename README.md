@@ -3,6 +3,8 @@ a python script for the batch conversion of profex .str to TOPAS format .str
 
 thanks co-pilot
 
+[![DOI](https://zenodo.org/badge/1187204487.svg)](https://doi.org/10.5281/zenodo.19134548)
+
 # Purpose
 Batch conversion of profex str files to a format readable by TOPAS, e.g. the structures provided when Profex is installed. Full structures from V5.5 were used for testing.
 Every unique profex_format.str will produce a uniquely named TOPAS_format.str.
