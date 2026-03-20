@@ -1,5 +1,6 @@
 # Profex-.str-to-TOPAS-.str-converter
 a python script for the batch conversion of profex .str to TOPAS format .str 
+thanks co-pilot
 
 # Purpose
 Batch conversion of profex str files to a format readable by TOPAS, e.g. the structures provided when Profex is installed. Full structures from V5.5 were used for testing.
