@@ -171,7 +171,7 @@ def use_numeric_spacegroup(lattice: str) -> bool:
         return False
     return lattice.lower() in {
         "cubic",
-        # you may extend later:
+        # uncomment at will:
         "tetragonal",
         "orthorhombic",
     }
@@ -435,7 +435,7 @@ RE_CELL_BARE = re.compile(
 
 RE_ATOM_SINGLE = re.compile(
     rf"\bE=(?P<el>[A-Za-z][A-Za-z]?)(?P<charge>[+-]\d+)?"
-    rf"(?:\((?P<occ>{FLOAT})\))?"
+    rf"(?:\s*\((?P<occ>{FLOAT})\))?"
     rf"\s+.*?\bWyckoff=(?P<w>[a-z])"
     rf"(?:\s+x=(?P<x>{NUM_OR_FRAC}))?"
     rf"(?:\s+y=(?P<y>{NUM_OR_FRAC}))?"
@@ -455,7 +455,7 @@ RE_ATOM_MIXED = re.compile(
 
 RE_MIX_COMP = re.compile(
     rf"(?P<el>[A-Za-z][A-Za-z]?)(?P<charge>[+-]\d+)?"
-    rf"(?:\((?P<occ>[^)]+)\))?"
+    rf"(?:\s*\((?P<occ>[^)]+)\))?"
     rf"(?:\s*\*TDS=(?P<tds>{NUM_OR_FRAC}))?",
     re.I
 )
