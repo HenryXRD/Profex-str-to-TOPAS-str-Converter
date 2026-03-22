@@ -37,7 +37,9 @@ Any human looking at the profex str would be rightly confused.
     --out "C:\STRING2\Profex_Converted_Str_to_TOPAS\SUB-FOLDER where STRING2 is wherever you want the output to go and SUB-FOLDER is the same sub-folder in profex 
   
 
-•	THE USER SHOULD VERIFY THE OUTPUT IS CORRECT AND MATCHES THE INTENT OF THE PROFEX STR. THERE MAY BE FRINGE CASES I HAVE MISSED. 
+# THE USER SHOULD VERIFY THE OUTPUT IS CORRECT AND MATCHES THE INTENT OF THE PROFEX STR. THERE MAY BE FRINGE CASES I HAVE MISSED. 
+Most issues during testing were the result of formatting differences in the profex str or typos. For example, SpacegropuNo instead of SpacegroupNo, or spaces after a value where EVERY other .str has no space. 
+The original profex data is preserved as a comment for ALL atomic sites for this reason. 
 
 
 # Known failures to convert
