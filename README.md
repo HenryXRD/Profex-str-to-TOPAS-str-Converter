@@ -61,6 +61,8 @@ The original profex data is preserved as a comment for ALL atomic sites for this
 
 # Conversion
 
+The converter makes the assumption the profex.str is crystallographically incorrect and must prove itself. It does this by checking given data in profex.str against SPACEGRP.DAT. It is assumed SPACEGRP.DAT is error free.
+
 As much of the original profex.str is retained as a comment for the user to confirm (e.g. numeric space group number:setting or HM notation). Phase names generated uniquely so no 2 files within the same batch conversion will be the same. Parameters derived from phase names.
 
 Coordinates output as mod1 to avoid negatives
