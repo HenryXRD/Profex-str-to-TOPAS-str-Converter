@@ -38,7 +38,7 @@ Any human looking at the profex str would be rightly confused.
   
 
 # THE USER SHOULD VERIFY THE OUTPUT IS CORRECT AND MATCHES THE INTENT OF THE PROFEX STR. THERE MAY BE FRINGE CASES I HAVE MISSED. 
-Most issues during testing were the result of formatting differences in the profex str or typos. For example, SpacegropuNo instead of SpacegroupNo, or spaces after a value where EVERY other .str has no space. 
+Most issues during testing were the result of formatting differences in the profex str or typos. For example, SpacegropuNo instead of SpacegroupNo (solved with fuzzy logic), or spaces after a value where EVERY other .str has no space. 
 The original profex data is preserved as a comment for ALL atomic sites for this reason. 
 
 
