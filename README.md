@@ -106,7 +106,7 @@ Other columns record the space group, setting, origin, HM symbol and lattice use
 * Validated on the 1,113 structures supplied with Profex. Other .str sources (hand-written, CIF-derived) have not been tested yet.
 * Only `SpacegroupNo=` is read; a file giving only a Hermann–Mauguin symbol will fail with ERROR.
 * Coordinates or TDS given as formulas are not evaluated.
-* The TOPAS space_group is written as a number (Setting 1, cubic/tetragonal/orthorhombic) or as the SPACEGRP.DAT HM string otherwise. Always confirm it is in a form TOPAS accepts and matches the intended origin.
+* The TOPAS space_group is written as a number for Setting 1 cubic/tetragonal/orthorhombic groups, and as `N:2` for cubic/tetragonal groups in origin choice 2 (e.g. `227:2`). Other cases (including orthorhombic origin choice 2) use the SPACEGRP.DAT HM string. Always confirm it is in a form TOPAS accepts and matches the intended origin.
 
 # Planned for v3
 

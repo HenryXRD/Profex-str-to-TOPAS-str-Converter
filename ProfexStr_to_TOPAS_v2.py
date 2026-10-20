@@ -1527,7 +1527,7 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
                 f"All {len(all_entries)} SPACEGRP.DAT entries for SpacegroupNo={sgno} were tested; "
                 f"ALL sites match only {new_desc} ({new_info.get('hm')}), which was used. "
                 + ("This contradicts the Setting/OriginChoice stated in the Profex .str. " if stated else "")
-                + "Enter the space group in TOPAS in a form that matches this setting/origin, and verify. */"
+                + "The space_group below was written for this setting/origin; verify it in TOPAS. */"
             )
             setting_note_csv = f"resolved by site match: {orig_desc} -> {new_desc}" + (" (contradicts Profex)" if stated else "")
             info = new_info
@@ -1568,7 +1568,13 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
     # Numeric output is ONLY safe when the resolved setting is canonical (Setting=1)
     # and no HM-based setting inference was required.
 
-    if (
+    oc = info.get("origin_choice")
+    if lattice.lower() in {"cubic", "tetragonal"} and oc in (1, 2):
+        # Cubic/tetragonal groups with two origin choices (SPACEGRP.DAT Setting 1/2,
+        # same HM symbol). TOPAS: plain number = origin choice 1, "N:2" = origin choice 2.
+        space_group_out = str(sgno) if oc == 1 else f"{sgno}:2"
+        space_group_mode = f"numeric, origin choice {oc}"
+    elif (
         use_numeric_spacegroup(lattice)
         and setting_use == 1
         and (
