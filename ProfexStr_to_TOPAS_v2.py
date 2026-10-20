@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 ===============================================================================
-ProfexStr_to_TOPAS_v2_stable
+ProfexStr_to_TOPAS_v2
 ===============================================================================
 
 Deterministic Profex/BGMN .str -> TOPAS .str converter 
@@ -81,7 +81,7 @@ NUM_OR_FRAC = rf"(?:{FRAC}|{FLOAT_NOFRAC})"
 NM_TO_A = 10.0
 NM2_TO_A2 = 100.0
 
-# v2_stable default bounds for unit cell when Profex omits min/max
+# v2 default bounds for unit cell when Profex omits min/max
 DEFAULT_CELL_RELATIVE_TOL = 0.01  # ±1% for a, b, c (lengths)
 DEFAULT_ANGLE_RELATIVE_TOL = 0.01  # ±1% for al, be, ga (angles)
 
@@ -1588,7 +1588,7 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
     any_mixed_expansion = any(a["mixed"] for a in atoms)
 
     out = [
-        "/* Generated using ProfexStr_to_TOPAS_v2_stable.py by Henry Spratt */",
+        "/* Generated using ProfexStr_to_TOPAS_v2.py by Henry Spratt */",
         "",
         "str",
         f'  phase_name "{phase_topas}"',
@@ -1666,7 +1666,7 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
                     f"min={lo * NM_TO_A:.6f}; max={hi * NM_TO_A:.6f};"
                 )
             else:
-                # v2_stable: apply default ±1% bounds
+                # v2: apply default ±1% bounds
                 lo_def = mid * (1.0 - DEFAULT_CELL_RELATIVE_TOL)
                 hi_def = mid * (1.0 + DEFAULT_CELL_RELATIVE_TOL)
                 applied_default_cell_bounds = True

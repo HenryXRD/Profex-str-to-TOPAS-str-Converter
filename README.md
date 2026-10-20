@@ -2,7 +2,7 @@
 
 A Python script for the batch conversion of Profex/BGMN .str crystal structure files to TOPAS format .str files.
 
-Code written by prompting Microsoft Copilot. Code review and bug fixes (v2_stable updates, October 2026) aided by Claude (Anthropic). All crystallographic requirements and conversion rules were defined, tested and validated by the author.
+Code written by prompting Microsoft Copilot. Code review and bug fixes (v2 updates, October 2026) aided by Claude (Anthropic). All crystallographic requirements and conversion rules were defined, tested and validated by the author.
 
 [![DOI](https://zenodo.org/badge/1187204487.svg)](https://doi.org/10.5281/zenodo.19134548)
 
@@ -26,13 +26,13 @@ Every Profex .str produces one uniquely named TOPAS .str.
 *Ensure Profex is installed.* The script needs SPACEGRP.DAT from the Profex install.
 
 1. Download and install Python 3.
-2. Download `ProfexStr_to_TOPAS_v2_stable.py`.
+2. Download `ProfexStr_to_TOPAS_v2.py`.
 3. Open Command Prompt in the folder containing the .py file.
 
 Convert one folder:
 
 ```
-py ProfexStr_to_TOPAS_v2_stable.py ^
+py ProfexStr_to_TOPAS_v2.py ^
   --in "C:\Program Files\Profex5\Structures\SUB-FOLDER" ^
   --out "C:\STRING2\output\SUB-FOLDER"
 ```
@@ -40,7 +40,7 @@ py ProfexStr_to_TOPAS_v2_stable.py ^
 Convert every Profex structure folder in one go (paste into Command Prompt as is; in a .bat file use `%%F` and `%%~nxF`):
 
 ```
-for /d %F in ("C:\Program Files\Profex5\Structures\*") do py ProfexStr_to_TOPAS_v2_stable.py --in "%F" --out "C:\STRING2\output\%~nxF"
+for /d %F in ("C:\Program Files\Profex5\Structures\*") do py ProfexStr_to_TOPAS_v2.py --in "%F" --out "C:\STRING2\output\%~nxF"
 ```
 
 * Use `python` instead of `py` if that is how Python is installed on your PC.
