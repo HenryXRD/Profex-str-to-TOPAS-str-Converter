@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 ===============================================================================
-ProfexStr_to_TOPAS_v2_stable
+ProfexStr_to_TOPAS_v2
 ===============================================================================
 
 Deterministic Profex/BGMN .str -> TOPAS .str converter 
@@ -81,7 +81,7 @@ NUM_OR_FRAC = rf"(?:{FRAC}|{FLOAT_NOFRAC})"
 NM_TO_A = 10.0
 NM2_TO_A2 = 100.0
 
-# v2_stable default bounds for unit cell when Profex omits min/max
+# v2 default bounds for unit cell when Profex omits min/max
 DEFAULT_CELL_RELATIVE_TOL = 0.01  # ±1% for a, b, c (lengths)
 DEFAULT_ANGLE_RELATIVE_TOL = 0.01  # ±1% for al, be, ga (angles)
 
@@ -445,7 +445,7 @@ RE_ATOM_SINGLE = re.compile(
 )
 
 RE_ATOM_MIXED = re.compile(
-    rf"\bE=\((?P<inner>.+?)\)\s+.*?\bWyckoff=(?P<w>[a-z])"
+    rf"\bE=\((?P<inner>.+?)\)(?=\s)\s*.*?\bWyckoff=(?P<w>[a-z])"
     rf"(?:\s+x=(?P<x>{NUM_OR_FRAC}))?"
     rf"(?:\s+y=(?P<y>{NUM_OR_FRAC}))?"
     rf"(?:\s+z=(?P<z>{NUM_OR_FRAC}))?"
@@ -534,6 +534,109 @@ def parse_occ_token(tok: str):
         return (float(s), None)
     except ValueError:
         return (None, s)
+
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+def add_bare_local_params(raw: str, symbols, local_params: dict):
+    """
+    Profex atom lines may define an occupancy symbol WITHOUT PARAM= (e.g. 'p=0.04').
+    In BGMN that is a fixed local value (not refined). Capture it so the TOPAS output
+    gets its own uniquely named prm instead of an undefined, shared 'p'.
+    """
+    for sym in symbols:
+        if sym in local_params:
+            continue
+        m = re.search(rf"(?<![=\w]){re.escape(sym)}\s*=\s*({NUM_OR_FRAC})", raw)
+        if not m:
+            continue
+        tok = m.group(1)
+        try:
+            if "/" in tok:
+                n, d = tok.split("/", 1)
+                val = float(Fraction(int(n), int(d)))
+            else:
+                val = float(tok)
+        except ValueError:
+            continue
+        local_params[sym] = (val, None, None, "fixed")
+
+def split_top_level(text: str, sep: str = ","):
+    """Split on sep only at parenthesis depth 0."""
+    parts, depth, cur = [], 0, ""
+    for ch in text:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == sep and depth == 0:
+            parts.append(cur.strip()); cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        parts.append(cur.strip())
+    return parts
+
+
+def parse_mix_component(part: str):
+    """
+    Parse one component of a Profex mixed site, e.g. 'AL+3((1-ptrans)*pAL)' or 'FE+3(p)*TDS=0.01'.
+    The occupancy in brackets may itself contain brackets, so match them by depth.
+    Returns dict(el, charge, occ, tds) or None.
+    """
+    m = re.match(r"\s*([A-Za-z][A-Za-z]?)([+-]\d+)?", part)
+    if not m:
+        return None
+    rest = part[m.end():].lstrip()
+    occ = None
+    if rest.startswith("("):
+        depth = 0
+        for i, ch in enumerate(rest):
+            depth += (ch == "(") - (ch == ")")
+            if depth == 0:
+                occ = rest[1:i].strip()
+                rest = rest[i + 1:]
+                break
+    mt = re.search(rf"\*TDS=({NUM_OR_FRAC})", rest)
+    return {"el": m.group(1), "charge": m.group(2), "occ": occ, "tds": mt.group(1) if mt else None}
+
+
+RE_HEADER_PARAM = re.compile(r"\bPARAM\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^\s/]+)", re.I)
+RE_HEADER_BARE = re.compile(r"(?<![=\w])([A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)\s*([^\s/]+)")
+RE_SAFE_EXPR = re.compile(r"^[A-Za-z0-9_.+\-*/() ]+$")
+
+
+def collect_header_defs(lines):
+    """
+    Variables defined on non-atom lines of a Profex .str (e.g. 'pMg=0.794',
+    'PARAM=pFE=0.7_0.5^1', 'pAL=(1-pMG-pFE)'). Only used later if an occupancy
+    expression refers to them. '==' (BGMN macros) is ignored.
+    Returns name -> dict(kind='param'|'fixed'|'expr', mid, lo, hi, expr).
+    """
+    defs = {}
+    for ln in lines:
+        code = ln.split("//", 1)[0]
+        if re.search(r"\bE\s*=", code):
+            continue
+        spans = []
+        for m in RE_HEADER_PARAM.finditer(code):
+            spans.append(m.span())
+            try:
+                mid, lo, hi = parse_bgmn_mid_min_max(m.group(2))
+                defs[m.group(1)] = {"kind": "param", "mid": mid, "lo": lo, "hi": hi}
+            except ValueError:
+                pass
+        for m in RE_HEADER_BARE.finditer(code):
+            if any(a <= m.start() < b for a, b in spans) or m.group(1).upper() == "PARAM":
+                continue
+            name, val = m.group(1), m.group(2)
+            if name in defs:
+                continue
+            try:
+                defs[name] = {"kind": "fixed", "mid": float(Fraction(val)) if "/" in val else float(val), "lo": None, "hi": None}
+            except ValueError:
+                if RE_SAFE_EXPR.match(val):
+                    defs[name] = {"kind": "expr", "expr": val}
+    return defs
 
 def rewrite_expr(expr: str, name_map: dict) -> str:
     """
@@ -939,6 +1042,28 @@ def pick_setting_from_profex_hm(info_by_sg_setting, sgno: int, hm_profex: str):
         return matches[0]
     return None
 
+def constrained_axes(lattice, unique_axis, rhombo_axes=False):
+    """
+    Cell parameters that are fixed or linked by the lattice system. These must NOT be
+    emitted as independent refinable parameters (they are written by
+    apply_lattice_constraints instead).
+    """
+    lat = (lattice or "").strip().lower()
+    ua = (unique_axis or "b").strip().lower()
+    if lat == "cubic":
+        return {"b", "c", "al", "be", "ga"}
+    if lat == "tetragonal":
+        return {"b", "al", "be", "ga"}
+    if lat == "rhombohedral" or (lat in ("hexagonal", "trigonal") and rhombo_axes):
+        return {"b", "c", "be", "ga"}
+    if lat in ("hexagonal", "trigonal"):
+        return {"b", "al", "be", "ga"}
+    if lat == "orthorhombic":
+        return {"al", "be", "ga"}
+    if lat == "monoclinic":
+        return {"a": {"be", "ga"}, "c": {"al", "be"}}.get(ua, {"al", "ga"})
+    return set()
+
 # ---------------- Cell constraints (lattice-based) ----------------
 def apply_lattice_constraints(out, phase_topas, cell_ranges, lattice, unique_axis, rhombo_axes=False):
     lat = (lattice or "").strip().lower()
@@ -972,8 +1097,8 @@ def apply_lattice_constraints(out, phase_topas, cell_ranges, lattice, unique_axi
     # Hexagonal / Trigonal:
     # - default: hexagonal axes constraints (a=b, α=β=90, γ=120)
     # - rhombo_axes=True: primitive rhombohedral axes constraints (a=b=c, α=β=γ)
-    if lat in ("hexagonal", "trigonal"):
-        if rhombo_axes:
+    if lat in ("hexagonal", "trigonal", "rhombohedral"):
+        if rhombo_axes or lat == "rhombohedral":
             # a=b=c
             if have("a"):
                 out.append(f" b = {pname('a')};")
@@ -1014,6 +1139,77 @@ def apply_lattice_constraints(out, phase_topas, cell_ranges, lattice, unique_axi
 
     # Triclinic: no automatic fixing
     return
+
+# ---------------- Alternative-setting check (all sites must match) ----------------
+def sites_fit_entry(atoms, entry):
+    """
+    Count how many Profex sites would FAIL validation against one SPACEGRP.DAT entry,
+    using the same rules as the main site loop (general positions must be complete;
+    special positions must match an equivalent-position triplet, incl. centring;
+    missing free coordinates must be determinable). Returns the number of failing sites.
+    """
+    wy = entry.get("wyckoff_proto", {})
+    ops_all = entry.get("wyckoff_ops", {})
+    cvecs = centring_vectors_from_hm(entry.get("hm", ""))
+    fails = 0
+    for a in atoms:
+        proto = wy.get(a["wyck"])
+        if proto is None:
+            fails += 1
+            continue
+        g = {ax: a["given"][ax][0] for ax in ("x", "y", "z")}
+        if proto == ["x", "y", "z"]:
+            if any(g[ax] is None for ax in ("x", "y", "z")):
+                fails += 1
+            continue
+        ops = ops_all.get(a["wyck"])
+        if not ops:
+            fails += 1
+            continue
+        filled = None
+        for trip in ops:
+            for t in cvecs:
+                ok, out_xyz, _ = try_match_triplet(trip, shift_given_xyz(g, t))
+                if ok:
+                    filled = unshift_out_xyz(out_xyz, t)
+                    break
+            if filled is not None:
+                break
+        if filled is None:
+            fails += 1
+            continue
+        for i, ax in enumerate(("x", "y", "z")):
+            if g[ax] is None and proto[i] in ("x", "y", "z") and filled[ax] is None:
+                fails += 1
+                break
+    return fails
+
+
+def cell_compatible(entry, cell_ranges):
+    """
+    An alternative setting is only acceptable if the cell given in the Profex .str
+    can belong to it (rhombohedral vs hexagonal axes; monoclinic unique axis).
+    """
+    lat = (entry.get("lattice") or "").lower()
+    rh = infer_rhombohedral_axes_from_cell(cell_ranges)
+    if lat == "rhombohedral" and not rh:
+        return False
+    if lat in ("trigonal", "hexagonal") and str(entry.get("hm", "")).upper().startswith("R") and rh:
+        return False
+    if lat == "monoclinic":
+        angles = [k for k in ("al", "be", "ga") if k in cell_ranges]
+        if len(angles) == 1:
+            want = {"al": "a", "be": "b", "ga": "c"}[angles[0]]
+            if (entry.get("unique_axis") or "b").lower() != want:
+                return False
+    return True
+
+
+def describe_entry(entry):
+    d = f"Setting={entry.get('setting')}"
+    if entry.get("origin_choice") is not None:
+        d += f" OriginChoice={entry.get('origin_choice')}"
+    return d
 
 # ---------------- Main conversion ----------------
 def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_setting_origin, info_by_sg_setting, info_by_sg_setting_origin, phase_counts):
@@ -1136,7 +1332,7 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
             for pm in RE_PARAM_IN_LINE.finditer(raw):
                 pname = pm.group(1)
                 try:
-                    local_params[pname] = parse_bgmn_mid_min_max(pm.group(2))
+                    local_params[pname] = (*parse_bgmn_mid_min_max(pm.group(2)), "param")
                 except ValueError:
                     pass
 
@@ -1144,24 +1340,32 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
             site_key = site_key_counter
 
             inner = mm.group("inner")
-            parts = [p.strip() for p in inner.split(",")]
+            parts = split_top_level(inner)
 
             comps = []
             for part in parts:
-                mc = RE_MIX_COMP.search(part)
+                mc = parse_mix_component(part)
                 if not mc:
                     continue
-                el = norm_el(mc.group("el"))
+                el = norm_el(mc["el"])
                 if len(el) not in (1, 2):
                     raise ValueError(f"Invalid element symbol after normalization: {el}")
 
-                occ_val, occ_expr = parse_occ_token(mc.group("occ"))
+                occ_val, occ_expr = parse_occ_token(mc["occ"])
+                tds_tok = mc["tds"]
                 comps.append({
                     "el": el,
                     "occ": occ_val,
                     "occ_expr": occ_expr,
-                    "tds": float(mc.group("tds")) if mc.group("tds") else None
+                    "tds": (float(Fraction(tds_tok)) if tds_tok and "/" in tds_tok else (float(tds_tok) if tds_tok else None))
                 })
+
+            # occupancy symbols defined on the line without PARAM= (fixed in BGMN)
+            syms = []
+            for c in comps:
+                if c["occ_expr"]:
+                    syms += [t for t in _IDENT_RE.findall(c["occ_expr"]) if t not in syms]
+            add_bare_local_params(raw, syms, local_params)
 
             # infer remainder occupancy for 2-component sites:
             # if one comp has a symbolic occ (e.g. p) and the other has none -> set other to (1-p)
@@ -1204,7 +1408,7 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
             for pm in RE_PARAM_IN_LINE.finditer(raw):
                 pname = pm.group(1)
                 try:
-                    local_params[pname] = parse_bgmn_mid_min_max(pm.group(2))
+                    local_params[pname] = (*parse_bgmn_mid_min_max(pm.group(2)), "param")
                 except ValueError:
                     pass
 
@@ -1295,9 +1499,54 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
             f"{path.name}: No SPACEGRP.DAT entry found for SpacegroupNo={sgno}, Setting={setting_use}, OriginChoice={origin_use}"
         )
 
+    # ---------------- Alternative-setting check ----------------
+    # If any site fails against the selected entry, test EVERY other SPACEGRP.DAT entry
+    # for this SpacegroupNo. Switch only if exactly ONE entry matches ALL sites (and is
+    # compatible with the given cell). Several full matches = ambiguous: keep, flag.
+    setting_note_csv = ""
+    initial_fails = sites_fit_entry(atoms, info)
+    if initial_fails > 0:
+        all_entries = [e for (g, s_), e in sorted(info_by_sg_setting.items()) if g == sgno]
+        candidates = []
+        for e in all_entries:
+            if e is info:
+                continue
+            if not cell_compatible(e, cell_ranges):
+                continue
+            if unique_axis_profex is not None and not ua_matches(e.get("unique_axis"), unique_axis_profex):
+                continue
+            if sites_fit_entry(atoms, e) == 0:
+                candidates.append(e)
+        orig_desc = describe_entry(info)
+        if len(candidates) == 1:
+            new_info = candidates[0]
+            new_desc = describe_entry(new_info)
+            stated = (setting_profex is not None or origin_profex is not None)
+            sg_setting_note = (
+                f"  /* WARNING: {initial_fails} site(s) did not match SPACEGRP.DAT {orig_desc}. "
+                f"All {len(all_entries)} SPACEGRP.DAT entries for SpacegroupNo={sgno} were tested; "
+                f"ALL sites match only {new_desc} ({new_info.get('hm')}), which was used. "
+                + ("This contradicts the Setting/OriginChoice stated in the Profex .str. " if stated else "")
+                + "Enter the space group in TOPAS in a form that matches this setting/origin, and verify. */"
+            )
+            setting_note_csv = f"resolved by site match: {orig_desc} -> {new_desc}" + (" (contradicts Profex)" if stated else "")
+            info = new_info
+            setting_use = new_info.get("setting")
+            origin_use = new_info.get("origin_choice")
+        elif len(candidates) > 1:
+            descs = ", ".join(describe_entry(e) for e in candidates)
+            sg_setting_note = (sg_setting_note or "") + (
+                f"\n  /* NOTE: {initial_fails} site(s) did not match SPACEGRP.DAT {orig_desc}, but ALL sites match "
+                f"more than one other entry ({descs}). Ambiguous, so the original entry was kept; resolve manually. */"
+            )
+            setting_note_csv = f"ambiguous: all sites match {descs}"
+        else:
+            setting_note_csv = f"no SPACEGRP.DAT entry for SpacegroupNo={sgno} matches all sites"
+
     # Optional: if Profex provides UniqueAxis, warn if it doesn't match the chosen entry
     if unique_axis_profex is not None and not ua_matches(info.get("unique_axis"), unique_axis_profex):
-        sg_setting_note += (
+        # sg_setting_note may be None here (e.g. when Profex gives Setting=), so start from ""
+        sg_setting_note = (sg_setting_note or "") + (
             f"\n  /* WARNING: Profex UniqueAxis={unique_axis_profex} does not match SPACEGRP.DAT UniqueAxis={info.get('unique_axis')}. */"
         )
 
@@ -1395,8 +1644,19 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
     # Track whether we applied default bounds (for a single phase-level note)
     applied_default_cell_bounds = False
 
+    # Parameters fixed/linked by symmetry are never written as refinable values
+    rhombo_axes = infer_rhombohedral_axes_from_cell(cell_ranges) and (setting_use == 2)
+    fixed_axes = constrained_axes(lattice, unique_axis, rhombo_axes=rhombo_axes)
+    _profex_name = {"a": "A", "b": "B", "c": "C", "al": "ALPHA", "be": "BETA", "ga": "GAMMA"}
+
     for ax in ("a", "b", "c"):
         if ax in cell_ranges:
+            if ax in fixed_axes:
+                out.append(
+                    f"  /* Profex {_profex_name[ax]}={cell_ranges[ax][0]:g} is fixed or linked by "
+                    f"{lattice} symmetry, so it is not refined (see constraints below) */"
+                )
+                continue
             mid, lo, hi = cell_ranges[ax]
 
             if lo is not None:
@@ -1406,7 +1666,7 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
                     f"min={lo * NM_TO_A:.6f}; max={hi * NM_TO_A:.6f};"
                 )
             else:
-                # v2_stable: apply default ±1% bounds
+                # v2: apply default ±1% bounds
                 lo_def = mid * (1.0 - DEFAULT_CELL_RELATIVE_TOL)
                 hi_def = mid * (1.0 + DEFAULT_CELL_RELATIVE_TOL)
                 applied_default_cell_bounds = True
@@ -1418,6 +1678,12 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
 
     for ax in ("al", "be", "ga"):
         if ax in cell_ranges:
+            if ax in fixed_axes:
+                out.append(
+                    f"  /* Profex {_profex_name[ax]}={cell_ranges[ax][0]:g} is fixed or linked by "
+                    f"{lattice} symmetry, so it is not refined (see constraints below) */"
+                )
+                continue
             mid, lo, hi = cell_ranges[ax]
 
             if lo is not None:
@@ -1437,7 +1703,6 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
 
     out.append("")
     out.append("  /* Unit cell constraints from SPACEGRP.DAT lattice system */")
-    rhombo_axes = infer_rhombohedral_axes_from_cell(cell_ranges) and (setting_use == 2)
     apply_lattice_constraints(out, phase_topas, cell_ranges, lattice, unique_axis, rhombo_axes=rhombo_axes)
 
     out.append("")
@@ -1453,7 +1718,7 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
     for a in atoms:
         sk = a.get("site_key")
         lp = a.get("local_params") or {}
-        for base, (mid, lo, hi) in lp.items():
+        for base, (mid, lo, hi, kind) in lp.items():
             key = (sk, base)
             if key in site_param_name_map:
                 continue
@@ -1461,7 +1726,7 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
             # unique per Profex atom line (site_key) AND wyckoff letter for readability
             uniq = f"{base_s}_{a['wyck']}{sk}_{phase_topas}"
             site_param_name_map[key] = uniq
-            prm_defs.append((uniq, mid, lo, hi))
+            prm_defs.append((uniq, mid, lo, hi, kind, base))
 
     # attach per-atom map for expression rewriting
     for a in atoms:
@@ -1470,15 +1735,71 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
         for base in (a.get("local_params") or {}).keys():
             a["_param_map"][base] = site_param_name_map[(sk, base)]
 
+    # header-level variables (defined outside atom lines) referenced by occupancies
+    header_defs = collect_header_defs(lines)
+    needed, stack = [], [t for a in atoms if a.get("occ_expr")
+                         for t in _IDENT_RE.findall(a["occ_expr"]) if t not in a["_param_map"]]
+    while stack:
+        t = stack.pop()
+        if t in needed or t not in header_defs:
+            continue
+        needed.append(t)
+        if header_defs[t]["kind"] == "expr":
+            stack += _IDENT_RE.findall(header_defs[t]["expr"])
+    global_map = {t: f"{sanitize_param_name(t)}_{phase_topas}" for t in needed}
+    for a in atoms:
+        for t in _IDENT_RE.findall(a.get("occ_expr") or ""):
+            if t not in a["_param_map"] and t in global_map:
+                a["_param_map"][t] = global_map[t]
+    header_prm_lines = []
+    for t in sorted(needed, key=lambda n: header_defs[n]["kind"] == "expr"):
+        d, n = header_defs[t], global_map[t]
+        if d["kind"] == "fixed":
+            header_prm_lines.append(
+                f" prm !{n} {d['mid']:g} min 0 max 1 /* Profex {t}={d['mid']:g} (header, no PARAM=) is fixed, as in BGMN. "
+                f"It can be refined by removing the !, but that is probably not the intent of the source .str. */")
+        elif d["kind"] == "param":
+            if d["lo"] is not None:
+                header_prm_lines.append(f" prm {n} {d['mid']:g} min {d['lo']:g} max {d['hi']:g}")
+            else:
+                header_prm_lines.append(f" prm {n} {d['mid']:g} min 0 max 1 /* no limits in Profex; occupancy default 0-1 */")
+        else:
+            undefined_in_expr = [x for x in _IDENT_RE.findall(d["expr"]) if x not in global_map]
+            header_prm_lines.append(f" prm {n} = {rewrite_expr(d['expr'], global_map)}; /* Profex {t}={d['expr']} */"
+                                    + (f" /* WARNING: {', '.join(undefined_in_expr)} undefined */" if undefined_in_expr else ""))
+
+    # any occupancy symbol still undefined would break TOPAS: flag it loudly
+    undefined_syms = sorted({t for a in atoms if a.get("occ_expr")
+                             for t in _IDENT_RE.findall(a["occ_expr"]) if t not in a.get("_param_map", {})})
+    if undefined_syms:
+        warnings.append(
+            f" /* WARNING: occupancy symbol(s) {', '.join(undefined_syms)} are not defined on their Profex atom line. "
+            f"They are undefined in this TOPAS file; define them before refining. */"
+        )
+
+    if header_prm_lines:
+        out.append("")
+        out.append(" /* Occupancy parameters from the Profex header (shared by all sites that use them) */")
+        out.extend(header_prm_lines)
+        out.append("")
+
     # emit prm defs
     if prm_defs:
         out.append("")
         out.append(" /* Occupancy parameters from Profex (site-local) */")
-        for name, mid, lo, hi in prm_defs:
-            if lo is not None:
+        for name, mid, lo, hi, kind, base in prm_defs:
+            if kind == "fixed":
+                # BGMN: a local value without PARAM= is fixed. Keep it fixed (!), but give
+                # 0-1 limits so removing the ! refines it sensibly.
+                out.append(
+                    f" prm !{name} {mid:g} min 0 max 1 "
+                    f"/* Profex {base}={mid:g} has no PARAM=, so this occupancy is fixed (as in BGMN). "
+                    f"It can be refined by removing the !, but that is probably not the intent of the source .str. */"
+                )
+            elif lo is not None:
                 out.append(f" prm {name} {mid:g} min {lo:g} max {hi:g}")
             else:
-                out.append(f" prm {name} {mid:g}")
+                out.append(f" prm {name} {mid:g} min 0 max 1 /* no limits in Profex; occupancy default 0-1 */")
         out.append("")
 
     out.append("")
@@ -1663,10 +1984,11 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
 
     # Only warn globally if sites were skipped
     if skipped_sites > 0:
+        reasons = "; ".join(f"{n} x {r}" for r, n in skip_reasons.items())
         warnings.append(
-            f" /* WARNING: {skipped_sites} atom site(s) were skipped because the given Profex coordinates did not match "
-            f"any equivalent-position triplet in SPACEGRP.DAT for the resolved space group entry. "
-            f"The structure is ambiguous; verify with the Bilbao Crystallographic Server or other information. */"
+            f" /* WARNING: {skipped_sites} atom site(s) were skipped. Reason(s): {reasons}. "
+            f"Each skipped site is marked ERROR below with its original Profex line. "
+            f"Verify with the Bilbao Crystallographic Server or other information. */"
         )
 
     # DO NOT emit global warnings for coordinate transforms or fixed constants
@@ -1694,11 +2016,14 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
         out = out[:3] + hdr + out[3:]
 
     metrics = {
+        "status": "SKIPPED_SITES" if skipped_sites > 0 else ("UNDEFINED_SYMBOLS" if undefined_syms else "OK"),
+        "error": "",
         "input_file": str(path),
         "phase_name": phase_topas,
         "sgno": sgno,
         "setting_use": setting_use,
-        "origin_use": origin_profex,
+        "origin_use": info.get("origin_choice"),
+        "setting_note": setting_note_csv,
         "hm_used": hm,
         "lattice": lattice,
         "unique_axis": unique_axis,
@@ -1739,7 +2064,7 @@ def main():
     # First pass: count PHASE= occurrences
     phase_counts = {}
 
-    for f in sorted(in_dir.glob("*.str")):
+    for f in sorted(f for f in in_dir.iterdir() if f.is_file() and f.suffix.lower() == ".str"):
         lines = f.read_text(errors="ignore").splitlines()
         for ln in lines:
             m = RE_PHASE.search(ln)
@@ -1753,7 +2078,7 @@ def main():
 
     all_metrics = []
 
-    for f in sorted(in_dir.glob("*.str")):
+    for f in sorted(f for f in in_dir.iterdir() if f.is_file() and f.suffix.lower() == ".str"):
         try:
             phase_topas, text, metrics = convert_one_str(
                 f,
@@ -1766,7 +2091,7 @@ def main():
                 phase_counts,
             )
             all_metrics.append(metrics)
-            
+
             out_file = out_dir / f.name
 
             if out_file.exists():
@@ -1784,40 +2109,58 @@ def main():
         except Exception as e:
             # Write per-file error report and continue
             (out_dir / f"{f.stem}_ERROR.txt").write_text(str(e), encoding="utf-8")
+            # Also record the failure in the CSV report so no file goes missing
+            all_metrics.append({
+                "status": "ERROR",
+                "error": str(e).replace("\n", " "),
+                "input_file": str(f),
+            })
 
-        # Write canary/regression report
-        from datetime import datetime
+    # Write canary/regression report ONCE, after all files are processed
+    from datetime import datetime
 
-        report_path = out_dir / f"_canary_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        with report_path.open("w", newline="", encoding="utf-8") as fp:
-            fieldnames = [
-                "input_file","phase_name","sgno","setting_use","origin_use","hm_used",
-                "lattice","unique_axis","skipped_sites","coords_transformed",
-                "constants_filled","mixed_expansion","skip_reasons"
-            ]
-            writer = csv.DictWriter(fp, fieldnames=fieldnames)
-            writer.writeheader()
-            for row in all_metrics:
-                # Ensure missing keys don't crash CSV writing
-                writer.writerow({k: row.get(k, "") for k in fieldnames})
+    report_path = out_dir / f"_canary_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    with report_path.open("w", newline="", encoding="utf-8") as fp:
+        fieldnames = [
+            "status","input_file","phase_name","sgno","setting_use","origin_use","hm_used",
+            "lattice","unique_axis","skipped_sites","coords_transformed",
+            "constants_filled","mixed_expansion","skip_reasons","setting_note","error"
+        ]
+        writer = csv.DictWriter(fp, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in all_metrics:
+            # Ensure missing keys don't crash CSV writing
+            writer.writerow({k: row.get(k, "") for k in fieldnames})
 
-        print(f"Wrote canary report: {report_path}")
+    print(f"Wrote canary report: {report_path}")
 
-        # Console summary
-        n_total = len(all_metrics)
-        n_skips = sum(1 for r in all_metrics if int(r.get("skipped_sites", 0) or 0) > 0)
-        n_trans = sum(1 for r in all_metrics if r.get("coords_transformed"))
-        n_const = sum(1 for r in all_metrics if r.get("constants_filled"))
+    # Console summary
+    n_total = len(all_metrics)
+    n_errors = sum(1 for r in all_metrics if r.get("status") == "ERROR")
+    n_skips = sum(1 for r in all_metrics if int(r.get("skipped_sites", 0) or 0) > 0)
+    n_trans = sum(1 for r in all_metrics if r.get("coords_transformed"))
+    n_const = sum(1 for r in all_metrics if r.get("constants_filled"))
 
-        print(f"Canary summary: total={n_total}, files_with_skips={n_skips}, files_with_transforms={n_trans}, files_with_constants={n_const}")
+    print(f"Canary summary: total={n_total}, files_failed={n_errors}, files_with_skips={n_skips}, "
+          f"files_with_transforms={n_trans}, files_with_constants={n_const}")
 
-        worst = sorted(all_metrics, key=lambda r: int(r.get("skipped_sites", 0) or 0), reverse=True)[:10]
-        print("Top offenders (by skipped_sites):")
-        for r in worst:
-            if int(r.get("skipped_sites", 0) or 0) <= 0:
-                break
-            print(f"  {r.get('input_file')}  skipped_sites={r.get('skipped_sites')}  sgno={r.get('sgno')}  setting={r.get('setting_use')}  hm={r.get('hm_used')}")
+    n_resolved = sum(1 for r in all_metrics if str(r.get("setting_note", "")).startswith("resolved"))
+    n_ambig = sum(1 for r in all_metrics if str(r.get("setting_note", "")).startswith("ambiguous"))
+    print(f"Setting check: resolved_by_site_match={n_resolved}, ambiguous={n_ambig}")
+
+    if n_errors:
+        print("Files that failed to convert (see *_ERROR.txt):")
+        for r in all_metrics:
+            if r.get("status") == "ERROR":
+                print(f"  {r.get('input_file')}")
+
+    worst = sorted(all_metrics, key=lambda r: int(r.get("skipped_sites", 0) or 0), reverse=True)[:10]
+    print("Top offenders (by skipped_sites):")
+    for r in worst:
+        if int(r.get("skipped_sites", 0) or 0) <= 0:
+            break
+        print(f"  {r.get('input_file')}  skipped_sites={r.get('skipped_sites')}  sgno={r.get('sgno')}  setting={r.get('setting_use')}  hm={r.get('hm_used')}")
 
 
 if __name__ == "__main__":
-    main()
+    main()

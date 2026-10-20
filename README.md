@@ -1,94 +1,116 @@
 # Profex.str to TOPAS.str Converter
-a python script for the batch conversion of profex .str to TOPAS format .str 
 
-thanks co-pilot
+A Python script for the batch conversion of Profex/BGMN .str crystal structure files to TOPAS format .str files.
+
+Code written by prompting Microsoft Copilot. Code review and bug fixes (v2 updates, October 2026) aided by Claude (Anthropic). All crystallographic requirements and conversion rules were defined, tested and validated by the author.
 
 [![DOI](https://zenodo.org/badge/1187204487.svg)](https://doi.org/10.5281/zenodo.19134548)
 
 # Purpose
-Batch conversion of profex str files to a format readable by TOPAS, e.g. the structures provided when Profex is installed. Full structures from V5.5 were used for testing.
-Every unique profex_format.str will produce a uniquely named TOPAS_format.str.
-The converter rejects ambiguity in a profex str and will skip the problematic site, or emit a warning. Very good example: arsenolite. 
-The As site is written in the profex str as Wyckoff e x 0.3529 y 0 z 0 for space group 227:1. This is ambiguous at best, wrong at worst. The converter will skip this site as other sources of information are required to resolve this ambiguity. 
-Any human looking at the profex str would be rightly confused. 
+
+Batch conversion of Profex .str files to a format readable by TOPAS, e.g. the structures supplied with a Profex install. TOPAS users without ICDD PDF-5+ can then use starting structures comparable to those available to Profex users, where it matters (e.g. QPA).
+
+Every Profex .str produces one uniquely named TOPAS .str.
+
+# Design rules
+
+* **The source must prove itself.** The Profex .str is assumed to possibly be wrong. Every site is checked against SPACEGRP.DAT from the Profex install, which is assumed to be correct.
+* **Invent nothing.** Free coordinates are never guessed. A site that cannot be resolved is skipped and flagged, never written with made-up values.
+* **Preserve everything.** The original Profex line is kept as a comment beside every TOPAS line it produced, so the user can always check the conversion.
+* **Name parameters meaningfully.** Parameter names are derived from the phase name (e.g. a_Calcite, scale_Calcite, csl_Calcite), so no two phases in a refinement collide.
+* **Leave Hermann–Mauguin notation to the user.** The Profex HM symbol is kept verbatim as a comment; the user confirms a form TOPAS accepts.
+* **Report every outcome.** Each output folder gets a CSV report listing every file with its status and the reason for any problem.
 
 # How to use
 
-*Ensure Profex is installed*
+*Ensure Profex is installed.* The script needs SPACEGRP.DAT from the Profex install.
 
-•	Ensure path for SPACEGRP.DAT from profex install is set correctly in the .py file
+1. Download and install Python 3.
+2. Download `ProfexStr_to_TOPAS_v2.py`.
+3. Open Command Prompt in the folder containing the .py file.
 
-•	DEFAULT_SPACEGRP_DAT = r"C:\Program Files\Profex5\BGMNwin\SPACEGRP.DAT"
+Convert one folder:
 
-•	Open command prompt
+```
+py ProfexStr_to_TOPAS_v2.py ^
+  --in "C:\Program Files\Profex5\Structures\SUB-FOLDER" ^
+  --out "C:\STRING2\output\SUB-FOLDER"
+```
 
-•	Download and save .py
+Convert every Profex structure folder in one go (paste into Command Prompt as is; in a .bat file use `%%F` and `%%~nxF`):
 
-•	Download and install python 
+```
+for /d %F in ("C:\Program Files\Profex5\Structures\*") do py ProfexStr_to_TOPAS_v2.py --in "%F" --out "C:\STRING2\output\%~nxF"
+```
 
-•	In command prompt:
+* Use `python` instead of `py` if that is how Python is installed on your PC.
+* Write the output somewhere you own (not inside Program Files).
+* Use a new, empty output folder for each run. Existing files are not overwritten; new copies are saved as `name_1.str`.
+* SPACEGRP.DAT is looked for at `C:\Program Files\Profex5\BGMNwin\SPACEGRP.DAT`. Use `--dat "path\to\SPACEGRP.DAT"` if yours is elsewhere.
 
-    cd C:\STRING1 where STRING is the directory for the .py file
+# THE USER SHOULD VERIFY THE OUTPUT IS CORRECT AND MATCHES THE INTENT OF THE PROFEX STR. THERE MAY BE FRINGE CASES I HAVE MISSED.
 
-    python ProfexStr_to_TOPAS_v2.py ^
+Most issues during testing came from formatting differences or typos in the Profex .str files (for example `SpacegropuNo` instead of `SpacegroupNo`, handled by fuzzy matching). The original Profex data is preserved as a comment for ALL atomic sites for this reason.
 
-    --in "C:\Program Files\Profex5\Structures\SUB-FOLDER” ^ where SUB-FOLDER is the sub-folder of profex str to convert in the main install.
+# What the converter does
 
-    --out "C:\STRING2\Profex_Converted_Str_to_TOPAS\SUB-FOLDER where STRING2 is wherever you want the output to go and SUB-FOLDER is the same sub-folder in profex 
-  
+**Space group and setting**
+* Uses the Setting given in the Profex .str; otherwise a unique HM match, a rhombohedral-axes check, or Setting 1 with a NOTE.
+* If any site fails against that entry, **every** SPACEGRP.DAT entry for the same space group number is tested. Only if exactly one entry matches ALL sites (and suits the given cell) is it used, with a WARNING naming both entries. If it contradicts the Setting/OriginChoice stated in the Profex .str, the warning says so. If several entries match, nothing is changed and the file is flagged as ambiguous.
 
-# THE USER SHOULD VERIFY THE OUTPUT IS CORRECT AND MATCHES THE INTENT OF THE PROFEX STR. THERE MAY BE FRINGE CASES I HAVE MISSED. 
-Most issues during testing were the result of formatting differences in the profex str or typos. For example, SpacegropuNo instead of SpacegroupNo (solved with fuzzy logic), or spaces after a value where EVERY other .str has no space. 
-The original profex data is preserved as a comment for ALL atomic sites for this reason. 
+**Atom sites**
+* Special-position coordinates are checked against all equivalent positions in SPACEGRP.DAT, including centring translations. Coordinates fixed by symmetry are filled in from SPACEGRP.DAT as exact fractions (1/3, not 0.3333).
+* General positions must have x, y and z given, otherwise the site is skipped.
+* Coordinates are output modulo 1.
+* Beq = 100 × TDS. If no TDS is given, beq 1 is inserted (the TOPAS GUI default when a structure without Beq is imported; note that in launch mode TOPAS uses Beq 0 if none is given).
 
+**Unit cell**
+* Profex min/max limits are carried over; if none are given, ±1% is applied.
+* Cell parameters fixed or linked by symmetry (e.g. b = a, γ = 120°) are written as constraints, not as refinable values. If the Profex file states such a value (e.g. `GAMMA=120` in a trigonal file), it is kept as a comment only.
 
-# Known failures to convert
-•	Arsenolite.str
+**Occupancies**
+* Mixed sites are expanded into one TOPAS site per element with shared coordinates.
+* Refinable occupancies (`PARAM=p=...`) become named `prm` parameters with the Profex limits, or 0–1 if no limits are given. Each site gets its own name, so sites are never linked by accident.
+* Occupancy values defined without `PARAM=` (on the atom line or in the header) are fixed in BGMN, so they are written as fixed parameters (`prm !name value min 0 max 1`) with a comment: they can be refined by removing the `!`, but that is probably not the intent of the source .str.
+* Values defined as formulas in the header (e.g. `pAL=(1-pMG-pFE)`) become linked TOPAS parameters (`prm pAL_phase = (1-pMG_phase-pFE_phase);`).
 
-•	smectitedi2wfix1.str    which has turbostratic disorder / layer modelling. Out of scope, for now…
+**Also inserted:** `scale`, `MVW()` and `CS_L(200 min 32 max 5000)` with derived parameter names.
 
-•	nontronite15a.str     which has turbostratic disorder / layer modelling. Out of scope, for now….
+# CSV report
 
-•	CRYOLITE.STR  Wyckoff a and b both given as 0, 0, 0 in the .str file. This is impossible for 14 P12_1/c1 
+Each output folder gets `_canary_report_<date_time>.csv` with one row per input file:
 
-•	CSH-0625.str
+| Column | Meaning |
+|---|---|
+| status | `OK`, `SKIPPED_SITES` (some sites not written), `UNDEFINED_SYMBOLS` (an occupancy symbol could not be resolved) or `ERROR` (file not converted; see `<name>_ERROR.txt`) |
+| setting_note | How the space-group entry was settled when sites failed: resolved by site match, ambiguous, or no entry matches |
+| skip_reasons | Why sites were skipped, with counts |
+| error | The reason a file could not be converted |
 
-•	CoFe2O4.str
+Other columns record the space group, setting, origin, HM symbol and lattice used.
 
-•	Cu2O.str
+# Results on the structures supplied with Profex
 
-•	ZnAl2O4.str
+1,113 structure files in 11 folders (Profex 5):
 
-# Conversion
+* **1,108 OK**, including CoFe2O4, Cu2O and ZnAl2O4, whose origin was found by testing every SPACEGRP.DAT setting (all sites fit origin 2; for CoFe2O4 and Cu2O this contradicts the Profex .str).
+* **5 with skipped sites:**
+  * Arsenolite.str: As given on Wyckoff e (x, x, x) as x=0.3529, y=0, z=0. No equivalent position matches.
+  * CRYOLITE.STR: Wyckoff a and b are both given as 0, 0, 0, which is impossible for P12_1/c1.
+  * CSH-0625.str (CaSO4·0.625H2O): one Ca given on Wyckoff b as (0.2858, 0.2858, 1/6), which matches no position for b. Stoichiometry suggests the coordinates, not the Wyckoff letter, are in error.
+  * nontronite15a.str and smectitedi2wfix1.str: turbostratic/layer-disorder models with coordinates given as formulas. Out of scope for v2.
+* **0 not converted.**
 
-The converter makes the assumption the profex.str is crystallographically incorrect and must prove itself. It does this by checking given data in profex.str against SPACEGRP.DAT. It is assumed SPACEGRP.DAT is error free.
+# Limitations
 
-As much of the original profex.str is retained as a comment for the user to confirm (e.g. numeric space group number:setting or HM notation). Phase names generated uniquely so no 2 files within the same batch conversion will be the same. Parameters derived from phase names.
+* Validated on the 1,113 structures supplied with Profex. Other .str sources (hand-written, CIF-derived) have not been tested yet.
+* Only `SpacegroupNo=` is read; a file giving only a Hermann–Mauguin symbol will fail with ERROR.
+* Coordinates or TDS given as formulas are not evaluated.
+* The TOPAS space_group is written as a number (Setting 1, cubic/tetragonal/orthorhombic) or as the SPACEGRP.DAT HM string otherwise. Always confirm it is in a form TOPAS accepts and matches the intended origin.
 
-Coordinates output as mod1 to avoid negatives
+# Planned for v3
 
-Beq = 100 * TDS
-
-Beq 1 inserted when no TDS given as this is the TOPAS gui default for Beq handling when a structure or cif is imported where none are defined. Note, if you copy such str into a text editor for launch mode, TOPAS will use Beq 0 if you don't explicity add a Beq value.
-
-Profex min and max limits on unit cell applied. If none given +/- 1% default applied 
-
-Fixed unit cell parameters by crystal system do not have generated parameter names or are constrained (e.g. a = b = c for cubic with same parameter name)
-
-MVW(), CS_L and scale inserted with derived parameter names
-
-Occupancy parameters are inserted as well when necessary and also have unique names to avoid constraint. 
-
-Coordinates converted to fractions. SPACEGRP.DAT used to insert missing coordinates for special positions. Free coordinates are never guessed - the site is skipped if this is the case in the original .str
-
-
-
-
-
-
-
-
-
-
-
-
+* Turbostratic/layer-disorder models (BGMN supercell approach → TOPAS equivalent)
+* .cif input
+* Reverse conversion, TOPAS .str → Profex .str
+* Hermann–Mauguin translation to TOPAS-ready symbols
