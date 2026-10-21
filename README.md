@@ -103,6 +103,10 @@ Other columns record the space group, setting, origin, HM symbol and lattice use
   * nontronite15a.str and smectitedi2wfix1.str: turbostratic/layer-disorder models with coordinates given as formulas. Out of scope for v2.
 * **0 not converted.**
 
+# Known issues (v2)
+
+* **Rhombohedral cells given with GAMMA:** when a Profex file in a rhombohedral setting gives the cell angle as `GAMMA=` instead of `ALPHA=`, v2 drops the angle and writes no `al`/`be`/`ga`, so TOPAS uses 90°, which is the wrong cell. Affected files supplied with Profex: `Hematite_1.str` and `Ilmenite_1.str` (MarsMineralCompendium). Fixed in the upcoming v2.1. Until then, add the angle by hand in those two outputs, e.g. for Hematite_1: `al al_Hematite 55.28 min 54.7272 max 55.8328` and `be = al_Hematite; ga = al_Hematite;`.
+
 # Limitations
 
 * Validated on the 1,113 structures supplied with Profex. Other .str sources (hand-written, CIF-derived) have not been tested yet.
