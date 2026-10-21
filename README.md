@@ -76,6 +76,8 @@ Most issues during testing came from formatting differences or typos in the Prof
 
 **Also inserted:** `scale`, `MVW()` and `CS_L(200 min 32 max 5000)` with derived parameter names.
 
+**Not inserted: preferred orientation.** Preferred orientation is deliberately left out. Profex models it with spherical harmonics (`GEWICHT=SPHAR4`, `SPHAR6`, ...), which is not carried over; the Profex setting is kept as a comment only. If you want preferred orientation in TOPAS, add it yourself (e.g. a March–Dollase `PO(...)` along the direction that suits your sample).
+
 # CSV report
 
 Each output folder gets `_canary_report_<date_time>.csv` with one row per input file:
