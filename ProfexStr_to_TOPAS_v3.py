@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 ===============================================================================
-ProfexStr_to_TOPAS_v2
+ProfexStr_to_TOPAS_v3
 ===============================================================================
 
 Deterministic Profex/BGMN .str -> TOPAS .str converter 
@@ -85,7 +85,11 @@ NM2_TO_A2 = 100.0
 DEFAULT_CELL_RELATIVE_TOL = 0.01  # ±1% for a, b, c (lengths)
 DEFAULT_ANGLE_RELATIVE_TOL = 0.01  # ±1% for al, be, ga (angles)
 
-print("RUNNING SCRIPT:", __file__)
+# Script version: written into every output .str header and the CSV report,
+# so each converted file can be traced to the exact script that produced it.
+__version__ = "3.0"
+
+print("RUNNING SCRIPT:", __file__, "version", __version__)
 #print("NUM_OR_FRAC:", NUM_OR_FRAC)
 
 #from fractions import Fraction
@@ -162,6 +166,127 @@ def norm_el(sym: str) -> str:
         return sym.upper()
     return sym[0].upper() + sym[1].lower()
     
+_ORTHO_CENTRO_COMP = re.compile(r"2(?:_1)?(/)?([mabcnde])")
+_ORTHO_NONCENTRO_TOK = re.compile(r"2_1|2|[mabcnde]")
+
+
+def topas_orthorhombic_symbol(hm: str):
+    """
+    Short orthorhombic symbol for TOPAS: lattice letter + one symbol per axis,
+    no slashes, e.g. P2_1/b2_1/n2_1/m -> Pbnm, P2/n2/n2/n -> Pnnn,
+    Pmc2_1 -> Pmc21, P2_12_12_1 -> P212121.
+    Centrosymmetric (full symbol contains '/'): the symbol after each '/' is kept.
+    Non-centrosymmetric: each axis symbol is kept as is (2_1 -> 21).
+    A few SPACEGRP.DAT entries lack one '/' (e.g. P2_1/m2/c2_1a); these are
+    read as if the '/' were present.
+    Returns None if the symbol cannot be split into exactly 3 axis symbols.
+    """
+    if not hm or len(hm) < 4:
+        return None
+    lat, rest = hm[0], hm[1:]
+    comps = []
+    if "/" in rest:
+        pos = 0
+        while pos < len(rest):
+            mo = _ORTHO_CENTRO_COMP.match(rest, pos)
+            if not mo:
+                return None
+            comps.append(mo.group(2))
+            pos = mo.end()
+    else:
+        toks = _ORTHO_NONCENTRO_TOK.findall(rest)
+        if "".join(toks) != rest:
+            return None
+        comps = [t.replace("_", "") for t in toks]
+    if len(comps) != 3:
+        return None
+    return lat + "".join(comps)
+
+
+# Short symbols of the rhombohedral space groups. TOPAS names the rhombohedral-axes
+# setting by appending "r" (e.g. R-3cr), as listed in TOPAS's sgcom5.txt.
+RHOMBO_SHORT = {146: "R3", 148: "R-3", 155: "R32", 160: "R3m", 161: "R3c", 166: "R-3m", 167: "R-3c"}
+
+# SPACEGRP.DAT settings with no matching symbol in TOPAS's sgcom5.txt list.
+NO_TOPAS_SYMBOL = {(3, 7)}   # F121 (F-centred cell of P2)
+
+# Verified against TOPAS's SGCOM5.TXT generator table (operators compared with SPACEGRP.DAT
+# for every setting, 2.1-dev.13). Two settings use the origin of TOPAS's alternative "s" symbol:
+TOPAS_ALT_ORIGIN_SYMBOL = {(20, 2): "C2221s", (43, 2): "Fdd2s"}
+
+# Settings whose origin NO TOPAS symbol reproduces. TOPAS's symbol (as written) gives the same
+# space group with its origin moved by p:  x_TOPAS = x_SPACEGRP.DAT - p  (mod 1).
+# The output is flagged (status CHECK_SPACE_GROUP); the coordinates are NOT changed.
+TOPAS_ORIGIN_SHIFT = {
+    (17, 2): "0 0 1/4",   (17, 4): "1/4 0 0",   (17, 6): "0 1/4 0",
+    (19, 2): "1/4 1/4 1/4", (19, 4): "1/4 1/4 1/4", (19, 6): "1/4 1/4 1/4",
+    (20, 4): "1/4 0 0",   (20, 6): "0 1/4 0",
+    (24, 2): "1/4 1/4 1/4", (24, 4): "1/4 1/4 1/4", (24, 6): "1/4 1/4 1/4",
+    (43, 4): "0 1/4 1/4", (43, 6): "1/4 0 1/4",
+    (70, 3): "1/4 1/4 1/4", (70, 7): "1/4 1/4 1/4", (70, 11): "1/4 1/4 1/4",
+    (70, 4): "1/4 1/4 0", (70, 8): "0 1/4 1/4", (70, 12): "1/4 0 1/4",
+}
+
+
+def _general_position_ops(entry):
+    """Set of general-position operators (coset representatives) of a SPACEGRP.DAT entry."""
+    for letter, proto in entry.get("wyckoff_proto", {}).items():
+        if proto == ["x", "y", "z"]:
+            return frozenset(tuple(t.replace(" ", "") for t in op)
+                             for op in entry.get("wyckoff_ops", {}).get(letter, []))
+    return None
+
+
+def topas_space_group(entry, info_by_sg_setting):
+    """
+    TOPAS space_group text for one SPACEGRP.DAT entry. Returns (text, mode).
+    Rules (v2.1):
+      - Cubic/tetragonal origin choice 1 / 2         -> "N" / "N:2"
+      - Setting 1 (International Tables standard)    -> "N"
+      - Any other setting whose general-position operators and centring are
+        identical to Setting 1                       -> "N"
+      - No TOPAS symbol known (NO_TOPAS_SYMBOL)       -> SPACEGRP.DAT symbol
+      - Orthorhombic                                 -> short symbol, e.g. Pbnm; ":2" for origin choice 2
+      - Rhombohedral axes                            -> short symbol + "r", e.g. R-3cr
+      - Monoclinic / triclinic                       -> symbol without underscores, e.g. P121/n1
+    """
+    sgno = entry["sgno"]
+    setting = entry.get("setting")
+    hm = entry["hm"]
+    lattice = (entry.get("lattice") or "").lower()
+    oc = entry.get("origin_choice")
+    std = info_by_sg_setting.get((sgno, 1))
+    if lattice in {"cubic", "tetragonal"} and oc in (1, 2):
+        return (str(sgno) if oc == 1 else f"{sgno}:2"), f"numeric, origin choice {oc}"
+    if setting == 1:
+        return str(sgno), "numeric (standard setting)"
+    if (std is not None and oc != 2 and hm[:1] == std["hm"][:1]
+            and _general_position_ops(entry) is not None
+            and _general_position_ops(entry) == _general_position_ops(std)):
+        return str(sgno), "numeric (same operators as the standard setting)"
+    if (sgno, setting) in NO_TOPAS_SYMBOL:
+        return hm, "SPACEGRP.DAT symbol (no TOPAS symbol known)"
+    if (sgno, setting) in TOPAS_ALT_ORIGIN_SYMBOL:
+        return TOPAS_ALT_ORIGIN_SYMBOL[(sgno, setting)], "TOPAS alternative-origin symbol"
+    if lattice == "orthorhombic" and topas_orthorhombic_symbol(hm) is not None:
+        return (topas_orthorhombic_symbol(hm) + (":2" if oc == 2 else ""),
+                "short orthorhombic symbol" + (", origin choice 2" if oc == 2 else ""))
+    if lattice == "rhombohedral" and sgno in RHOMBO_SHORT:
+        return RHOMBO_SHORT[sgno] + "r", "rhombohedral axes"
+    if lattice in {"monoclinic", "triclinic"}:
+        return hm.replace("_", ""), "symbol without underscores"
+    return hm, "hermann_mauguin"
+
+
+def topas_symbol_is_ambiguous(entry, info_by_sg_setting):
+    """
+    True if the TOPAS symbol written for this setting gives a DIFFERENT origin from
+    SPACEGRP.DAT (no TOPAS symbol reproduces it). Since 2.1-dev.13 this is an exact list
+    (TOPAS_ORIGIN_SHIFT), checked against TOPAS's SGCOM5.TXT, not a guess.
+    """
+    return (entry["sgno"], entry.get("setting")) in TOPAS_ORIGIN_SHIFT
+
+
 def use_numeric_spacegroup(lattice: str) -> bool:
     """
     Decide whether TOPAS space_group should use numeric SpacegroupNo
@@ -1227,6 +1352,7 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
 
 
     cell_ranges = {}  # only what appears in Profex: ax -> (mid, lo, hi)
+    cell_bare_keys = set()  # cell values given WITHOUT PARAM= (fixed in BGMN)
     atoms = []        # expanded atoms
     site_key_counter = 0
 
@@ -1295,6 +1421,7 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
             if k in ("A", "B", "C", "ALPHA", "BETA", "GAMMA"):
                 try:
                     cell_ranges[cell_key_map(k)] = parse_bgmn_mid_min_max(v)
+                    cell_bare_keys.discard(cell_key_map(k))
                 except ValueError:
                     pass
 
@@ -1317,6 +1444,7 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
                 if k in ("A", "B", "C", "ALPHA", "BETA", "GAMMA"):
                     try:
                         cell_ranges[cell_key] = parse_bgmn_mid_min_max(v)
+                        cell_bare_keys.add(cell_key)
                     except ValueError:
                         pass
 
@@ -1527,7 +1655,7 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
                 f"All {len(all_entries)} SPACEGRP.DAT entries for SpacegroupNo={sgno} were tested; "
                 f"ALL sites match only {new_desc} ({new_info.get('hm')}), which was used. "
                 + ("This contradicts the Setting/OriginChoice stated in the Profex .str. " if stated else "")
-                + "Enter the space group in TOPAS in a form that matches this setting/origin, and verify. */"
+                + "The space_group below was written for this setting/origin; verify it in TOPAS. */"
             )
             setting_note_csv = f"resolved by site match: {orig_desc} -> {new_desc}" + (" (contradicts Profex)" if stated else "")
             info = new_info
@@ -1568,59 +1696,43 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
     # Numeric output is ONLY safe when the resolved setting is canonical (Setting=1)
     # and no HM-based setting inference was required.
 
-    if (
-        use_numeric_spacegroup(lattice)
-        and setting_use == 1
-        and (
-            setting_profex is not None
-            or inferred_from_hm is None
+    space_group_out, space_group_mode = topas_space_group(info, info_by_sg_setting)
+    sg_symbol_note_csv = ""
+    if (sgno, info.get("setting")) in NO_TOPAS_SYMBOL:
+        sg_hm_note = (
+            f"  /* WARNING: SPACEGRP.DAT {describe_entry(info)} ({hm}) has no matching symbol in the "
+            f"TOPAS space-group list. The SPACEGRP.DAT symbol is written below; enter the space group "
+            f"manually in TOPAS. */"
         )
-    ):
-        # Safe numeric output (unique representation)
-        space_group_out = str(sgno)
-        space_group_mode = "numeric"
-    else:
-        # Force HM output to preserve setting / axis / origin conventions
-        space_group_out = hm
-        space_group_mode = "hermann_mauguin"
+        sg_symbol_note_csv = "no TOPAS symbol for this setting"
+    elif topas_symbol_is_ambiguous(info, info_by_sg_setting):
+        p_shift = TOPAS_ORIGIN_SHIFT[(sgno, info.get("setting"))]
+        sg_hm_note = (
+            f"  /* WARNING: no TOPAS space-group symbol has the origin of SPACEGRP.DAT {describe_entry(info)}. "
+            f"TOPAS's {space_group_out} is the same space group with its origin moved by ({p_shift}). "
+            f"The coordinates below are as in Profex and do NOT fit {space_group_out} as written: "
+            f"subtract ({p_shift}) from every x y z (mod 1) before refining, or enter the structure another way. */"
+        )
+        sg_symbol_note_csv = f"origin differs from TOPAS {space_group_out}: shift x y z by -({p_shift})"
 
     # ---------------- Build TOPAS output ----------------
     any_mixed_expansion = any(a["mixed"] for a in atoms)
 
     out = [
-        "/* Generated using ProfexStr_to_TOPAS_v2.py by Henry Spratt */",
+        f"/* Converted from Profex {path.name} by ProfexStr_to_TOPAS {__version__} ({Path(__file__).name}), Henry Spratt */",
         "",
         "str",
         f'  phase_name "{phase_topas}"',
         f'  space_group "{space_group_out}"'
     ]
     warnings = []
-    
-    # Safety/provenance note: ask user to confirm TOPAS accepts the symbol and intent matches Profex
-    out.append("  /*")
-    out.append("     Space-group entry for TOPAS was generated automatically.")
-    out.append(f"     Output mode: {space_group_mode}.")
-    out.append("     Please confirm that TOPAS accepts this symbol and that it")
-    out.append("     matches the intended symmetry from the original Profex .str.")
-    out.append("  */")
 
-    # --- Profex str provenance (raw first, then interpreted) ---
-
-    # 1) EXACT symmetry line as it appeared in the Profex .str
+    # Provenance: the Profex symmetry line, verbatim (Setting, HM symbol, OriginChoice as given)
     if profex_sym_line:
-        out.append(f"  /* Profex symmetry line (verbatim): {profex_sym_line} */")
-
-    # 2) Parsed symmetry fields
-    out.append(f"  /* Parsed SpacegroupNo={sgno} */")
-
-    if setting_profex is not None:
-        out.append(f"  /* Parsed Setting={setting_profex} */")
-
-    if hm_profex is not None:
-        out.append(f"  /* Parsed Profex HermannMauguin={hm_profex} */")
-
-    if origin_profex is not None:
-        out.append(f"  /* Parsed OriginChoice={origin_profex} */")
+        _sym = profex_sym_line.split("//")[0].strip().replace("*/", "* /")
+        out.append(f"  /* Profex: {_sym} */")
+    else:
+        out.append(f"  /* Profex: SpacegroupNo={sgno} */")
 
     # 3) Warnings and resolution notes
     if sg_fuzzy_used:
@@ -1637,7 +1749,7 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
 
     # 4) Other metadata
     if formula_line:
-        out.append(f"  /* {formula_line} */")
+        out.append(f"  /* Profex {formula_line.split('//')[0].strip()} */")
 
     out.append("")
 
@@ -1647,6 +1759,25 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
     # Parameters fixed/linked by symmetry are never written as refinable values
     rhombo_axes = infer_rhombohedral_axes_from_cell(cell_ranges) and (setting_use == 2)
     fixed_axes = constrained_axes(lattice, unique_axis, rhombo_axes=rhombo_axes)
+
+    # Rhombohedral axes: alpha = beta = gamma, and that angle is REFINABLE (not 90).
+    # Profex files may give it as GAMMA (or BETA) instead of ALPHA. Carry it over as
+    # alpha, so it is not dropped as "linked" (before v2.1dev_12 TOPAS then used 90).
+    rhombo_angle_note = None
+    if ((lattice or "").strip().lower() == "rhombohedral" or rhombo_axes) \
+            and "al" not in fixed_axes and {"be", "ga"} <= set(fixed_axes) \
+            and "al" not in cell_ranges:
+        for src, src_name in (("ga", "GAMMA"), ("be", "BETA")):
+            if src in cell_ranges:
+                cell_ranges["al"] = cell_ranges.pop(src)
+                if src in cell_bare_keys:
+                    cell_bare_keys.discard(src)
+                    cell_bare_keys.add("al")
+                rhombo_angle_note = (
+                    f"  /* Profex gives the rhombohedral angle as {src_name}={cell_ranges['al'][0]:g}; "
+                    f"written as al, with be = ga = al (see constraints below) */"
+                )
+                break
     _profex_name = {"a": "A", "b": "B", "c": "C", "al": "ALPHA", "be": "BETA", "ga": "GAMMA"}
 
     for ax in ("a", "b", "c"):
@@ -1659,7 +1790,17 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
                 continue
             mid, lo, hi = cell_ranges[ax]
 
-            if lo is not None:
+            if ax in cell_bare_keys:
+                # No PARAM= in Profex: the value is FIXED in BGMN, so write it fixed (!).
+                lo_f = lo if lo is not None else mid * (1.0 - DEFAULT_CELL_RELATIVE_TOL)
+                hi_f = hi if hi is not None else mid * (1.0 + DEFAULT_CELL_RELATIVE_TOL)
+                out.append(
+                    f" {ax} !{ax}_{phase_topas} {mid * NM_TO_A:.6f} "
+                    f"min={lo_f * NM_TO_A:.6f}; max={hi_f * NM_TO_A:.6f};"
+                    f" /* Profex {_profex_name[ax]}={mid:g} has no PARAM=, so it is fixed in BGMN. "
+                    f"Remove the ! to refine it. */"
+                )
+            elif lo is not None:
                 # Profex explicitly provided bounds → respect them
                 out.append(
                     f" {ax} {ax}_{phase_topas} {mid * NM_TO_A:.6f} "
@@ -1676,6 +1817,8 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
                     f"min={lo_def * NM_TO_A:.6f}; max={hi_def * NM_TO_A:.6f};"
                 )
 
+    if rhombo_angle_note:
+        out.append(rhombo_angle_note)
     for ax in ("al", "be", "ga"):
         if ax in cell_ranges:
             if ax in fixed_axes:
@@ -1686,7 +1829,17 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
                 continue
             mid, lo, hi = cell_ranges[ax]
 
-            if lo is not None:
+            if ax in cell_bare_keys:
+                # No PARAM= in Profex: the value is FIXED in BGMN, so write it fixed (!).
+                lo_f = lo if lo is not None else mid * (1.0 - DEFAULT_ANGLE_RELATIVE_TOL)
+                hi_f = hi if hi is not None else mid * (1.0 + DEFAULT_ANGLE_RELATIVE_TOL)
+                out.append(
+                    f" {ax} !{ax}_{phase_topas} {mid:.6f} "
+                    f"min={lo_f:.6f}; max={hi_f:.6f};"
+                    f" /* Profex {_profex_name[ax]}={mid:g} has no PARAM=, so it is fixed in BGMN. "
+                    f"Remove the ! to refine it. */"
+                )
+            elif lo is not None:
                 out.append(
                     f" {ax} {ax}_{phase_topas} {mid:.6f} "
                     f"min={lo:.6f}; max={hi:.6f};"
@@ -2004,8 +2157,7 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
 
     if any_mixed_expansion:
         hdr += [
-            "  /* NOTE: One or more mixed-occupancy atomic sites from Profex were expanded",
-            "     into multiple TOPAS site entries with shared coordinates. */",
+            "  /* Mixed Profex sites are written as one TOPAS site per element, with shared coordinates. */",
             ""
         ]
 
@@ -2016,7 +2168,9 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
         out = out[:3] + hdr + out[3:]
 
     metrics = {
-        "status": "SKIPPED_SITES" if skipped_sites > 0 else ("UNDEFINED_SYMBOLS" if undefined_syms else "OK"),
+        "status": "SKIPPED_SITES" if skipped_sites > 0 else ("UNDEFINED_SYMBOLS" if undefined_syms else (
+            "CHECK_SPACE_GROUP" if ((sgno, info.get("setting")) in NO_TOPAS_SYMBOL
+                                    or topas_symbol_is_ambiguous(info, info_by_sg_setting)) else "OK")),
         "error": "",
         "input_file": str(path),
         "phase_name": phase_topas,
@@ -2024,6 +2178,8 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
         "setting_use": setting_use,
         "origin_use": info.get("origin_choice"),
         "setting_note": setting_note_csv,
+        "space_group_topas": space_group_out,
+        "space_group_note": sg_symbol_note_csv,
         "hm_used": hm,
         "lattice": lattice,
         "unique_axis": unique_axis,
@@ -2033,6 +2189,8 @@ def convert_one_str(path: Path, hm_info, sg_default, hm_by_sg_setting, hm_by_sg_
         "mixed_expansion": any_mixed_expansion,
         "skip_reasons": "; ".join(f"{k}={v}" for k, v in skip_reasons.items())
     }
+    # consistent two-space indentation inside the str block (some lines were written with one space)
+    out = [re.sub(r"^ (?=\S)", "  ", l) for l in "\n".join(out).split("\n")]
     return phase_topas, "\n".join(out), metrics
 
 # ---------------- CLI ----------------
@@ -2124,12 +2282,13 @@ def main():
         fieldnames = [
             "status","input_file","phase_name","sgno","setting_use","origin_use","hm_used",
             "lattice","unique_axis","skipped_sites","coords_transformed",
-            "constants_filled","mixed_expansion","skip_reasons","setting_note","error"
+            "constants_filled","mixed_expansion","skip_reasons","setting_note","error","space_group_topas","space_group_note","script_version"
         ]
         writer = csv.DictWriter(fp, fieldnames=fieldnames)
         writer.writeheader()
         for row in all_metrics:
             # Ensure missing keys don't crash CSV writing
+            row = dict(row, script_version=f"{__version__} ({Path(__file__).name})")
             writer.writerow({k: row.get(k, "") for k in fieldnames})
 
     print(f"Wrote canary report: {report_path}")
@@ -2163,4 +2322,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()
