@@ -340,4 +340,4 @@ Spratt, H. *Profex .str to TOPAS .str Converter*. Zenodo. https://doi.org/10.528
 
 ## Licence
 
-See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). Versions up to v3 were released under the Unlicense.
